@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Captions</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-weight: 300;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+        }
+
+        button {
+            background-color: #1a73e8;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #1557b0;
+        }
+
+        button.stop {
+            background-color: #d93025;
+        }
+
+        button.stop:hover {
+            background-color: #a50e0e;
+        }
+
+        button:disabled {
+            background-color: #444;
+            cursor: not-allowed;
+        }
+
+        #caption-container {
+            width: 80%;
+            max-width: 800px;
+            height: 300px;
+            background-color: #1e1e1e;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column-reverse;
+            /* Auto scroll to bottom */
+        }
+
+        #captions {
+            font-size: 1.5rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .partial {
+            color: #aaaaaa;
+            font-style: italic;
+        }
+
+        .final {
+            color: #ffffff;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Live Speech to Text</h1>
+
+    <div class="controls">
+        <button id="startBtn" onclick="startListeners()">Start</button>
+        <button id="stopBtn" onclick="stopListeners()" class="stop" disabled>Stop</button>
+        <button id="clearBtn" onclick="clearCaptions()" style="background-color: #555;">Clear</button>
+    </div>
+
+    <div id="caption-container">
+        <div id="captions"><span class="final"></span><span class="partial" id="partial-text"></span></div>
+    </div>
+
+    <script>
+        let evtSource = null;
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const captionsDiv = document.getElementById('captions');
+        const partialSpan = document.getElementById('partial-text');
+
+        // Accumulate final text here
+        let finalText = "";
+
+        async function startListeners() {
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            partialSpan.textContent = "Initializing...";
+
+            // Tell server to start recording
+            await fetch('/start');
+
+            // Open SSE connection
+            if (evtSource) {
+                evtSource.close();
+            }
+            evtSource = new EventSource("/listen");
+
+            evtSource.onopen = function () {
+                console.log("Connection opened");
+                partialSpan.textContent = "Listening...";
+            };
+
+            evtSource.onmessage = function (event) {
+                const data = JSON.parse(event.data);
+
+                if (data.error) {
+                    console.error("Server error:", data.error);
+                    partialSpan.textContent = "Error: " + data.error;
+                    return;
+                }
+
+                if (data.ping) {
+                    console.log("Ping");
+                    return;
+                }
+
+                if (data.partial !== undefined) {
+                    partialSpan.textContent = data.partial;
+                } else if (data.text) {
+                    if (data.text === "[STOPPED]") {
+                        evtSource.close();
+                        partialSpan.textContent = "";
+                        return;
+                    }
+                    // Append final result
+                    finalText += data.text + " ";
+                    // Update DOM
+                    // We rebuild the content to keep structure clean
+                    // Or just append a span. Let's just append text to a main span and keep partial separate.
+                    // Actually, simpler: update a 'final-content' span before the partial span.
+
+                    const newSpan = document.createElement('span');
+                    newSpan.className = 'final';
+                    newSpan.textContent = data.text + " ";
+                    captionsDiv.insertBefore(newSpan, partialSpan);
+
+                    partialSpan.textContent = "";
+                }
+            };
+
+            evtSource.onerror = function (err) {
+                console.error("EventSource failed:", err);
+                // Ideally handle reconnection or stop
+            };
+        }
+
+        async function stopListeners() {
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+
+            // Tell server to stop
+            await fetch('/stop');
+
+            if (evtSource) {
+                evtSource.close();
+                evtSource = null;
+            }
+            partialSpan.textContent = "";
+        }
+
+        function clearCaptions() {
+            finalText = "";
+            // Remove all spans except partial
+            while (captionsDiv.firstChild && captionsDiv.firstChild !== partialSpan) {
+                captionsDiv.removeChild(captionsDiv.firstChild);
+            }
+            // Or easier, just matching initialization:
+            // captionsDiv.innerHTML = '<span class="final"></span><span class="partial" id="partial-text"></span>';
+            // But we need to keep partialSpan reference if we do innerHTML rewrite. 
+            // Better to remove children.
+            // Actually, my structure is: div#captions > span.final (many) + span#partial-text (one at end)
+            // Wait, previous code: captionsDiv.insertBefore(newSpan, partialSpan);
+            // So structure: span.final, span.final, ..., span#partial-text.
+
+            // Safe clear:
+            const partial = document.getElementById('partial-text');
+            captionsDiv.innerHTML = '';
+            captionsDiv.appendChild(partial);
+            partial.textContent = "";
+        }
+    </script>
+</body>
+
+</html>
